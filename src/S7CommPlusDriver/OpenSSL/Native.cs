@@ -17,7 +17,6 @@ using System;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using System.Text;
 
 namespace OpenSsl
 {
@@ -32,35 +31,65 @@ namespace OpenSsl
             NativeLibrary.SetDllImportResolver(Assembly.GetExecutingAssembly(), DllImportResolver);
         }
 
+
         private static IntPtr DllImportResolver(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)
         {
-            if (libraryName == DLLNAME)
+            Console.WriteLine($"[OpenSSL-Debug] Attempting to resolve: {libraryName}");
+            string targetLib = null;
+
+            if (libraryName == DLLNAME || libraryName == SSLDLLNAME)
             {
-                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && RuntimeInformation.ProcessArchitecture == Architecture.X86)
-                    return NativeLibrary.Load(Path.Combine("runtimes", "win-x86", "native", "libcrypto-3.dll"), assembly, searchPath);
-                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && RuntimeInformation.ProcessArchitecture == Architecture.X64)
-                    return NativeLibrary.Load(Path.Combine("runtimes", "win-x64", "native", "libcrypto-3-x64.dll"), assembly, searchPath);
-                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-                    return NativeLibrary.Load(Path.Combine("runtimes", "win-arm64", "native", "libcrypto-3-arm64.dll"), assembly, searchPath);
-                if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX) && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-                    return NativeLibrary.Load("libcrypto.3.dylib", assembly, searchPath);
-                return IntPtr.Zero;
+                // 1. Handle Windows
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    if (RuntimeInformation.ProcessArchitecture == Architecture.X86)
+                        targetLib = Path.Combine("runtimes", "win-x86", "native", libraryName == DLLNAME ? "libcrypto-3.dll" : "libssl-3.dll");
+                    else if (RuntimeInformation.ProcessArchitecture == Architecture.X64)
+                        targetLib = Path.Combine("runtimes", "win-x64", "native", libraryName == DLLNAME ? "libcrypto-3-x64.dll" : "libssl-3-x64.dll");
+                    else if (RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
+                        targetLib = Path.Combine("runtimes", "win-arm64", "native", libraryName == DLLNAME ? "libcrypto-3-arm64.dll" : "libssl-3-arm64.dll");
+                }
+                // 2. Handle macOS
+                else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+                {
+                    targetLib = libraryName == DLLNAME ? "libcrypto.3.dylib" : "libssl.3.dylib";
+                }
+                // 3. Handle Linux (Aarch64 / x64)
+                else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+                {
+                    // Linux should find this by name globally.
+                    targetLib = libraryName == DLLNAME ? "libcrypto.so.3" : "libssl.so.3";
+                }
+
+                if (targetLib != null)
+                {
+                    try
+                    {
+                        //Console.WriteLine($"[OpenSSL-Debug] Trying NativeLibrary.Load: {targetLib}");
+                        IntPtr handle = NativeLibrary.Load(targetLib, assembly, searchPath);
+                        //Console.WriteLine($"[OpenSSL-Debug] Successfully loaded: {targetLib} (Handle: {handle})");
+                        return handle;
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[OpenSSL-Debug] Failed primary load ({targetLib}): {ex.Message}");
+
+                        // Fallback attempt for Linux/OSX
+                        try
+                        {
+                            string fallback = libraryName == DLLNAME ? "libcrypto.so" : "libssl.so";
+                            //Console.WriteLine($"[OpenSSL-Debug] Attempting fallback: {fallback}");
+                            return NativeLibrary.Load(fallback, assembly, searchPath);
+                        }
+                        catch (Exception ex2)
+                        {
+                            Console.WriteLine($"[OpenSSL-Debug] Fallback failed: {ex2.Message}");
+                            return IntPtr.Zero;
+                        }
+                    }
+                }
             }
 
-            if(libraryName == SSLDLLNAME)
-            {
-                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && RuntimeInformation.ProcessArchitecture == Architecture.X86)
-                    return NativeLibrary.Load(Path.Combine("runtimes", "win-x86", "native", "libssl-3.dll"), assembly, searchPath);
-                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && RuntimeInformation.ProcessArchitecture == Architecture.X64)
-                    return NativeLibrary.Load(Path.Combine("runtimes", "win-x64", "native", "libssl-3-x64.dll"), assembly, searchPath);
-                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-                    return NativeLibrary.Load(Path.Combine("runtimes", "win-arm64", "native", "libssl-3-arm64.dll"), assembly, searchPath);
-                if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX) && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-                    return NativeLibrary.Load("libssl.3.dylib", assembly, searchPath);
-                return IntPtr.Zero;
-            }
-
-            // Otherwise, fallback to default import resolver.
             return IntPtr.Zero;
         }
 
@@ -256,7 +285,17 @@ namespace OpenSsl
         public static extern IntPtr TLS_client_method();
 
         [DllImport(SSLDLLNAME, CallingConvention = CallingConvention.Cdecl)]
-        public static extern IntPtr SSL_export_keying_material(IntPtr ssl, byte[] outKeyMaterial, nint outKeyMaterialLength, char[] label, nint labelLength, IntPtr context, nint contextLength, int useContext);
+        public static extern int SSL_export_keying_material
+            (
+                IntPtr ssl,
+                [Out] byte[] outKeyMaterial,
+                nint outKeyMaterialLength,
+                byte[] label,           // Changed to byte[] for Linux
+                nint labelLength,
+                IntPtr context,
+                nint contextLength,
+                int useContext
+            );
 
         #endregion
 
@@ -286,10 +325,14 @@ namespace OpenSsl
         #endregion
 
         #region BIO
+        //Added for troubleshoot force handshake in SSL_connect
+        [DllImport(SSLDLLNAME, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int SSL_do_handshake(IntPtr ssl);
 
         // long BIO_ctrl(BIO *bp, int cmd, long larg, void *parg);
         [DllImport(DLLNAME, CallingConvention = CallingConvention.Cdecl)]
-        public static extern long BIO_ctrl(IntPtr bp, int cmd, long larg, IntPtr parg);
+        // Change return and larg from long to nint
+        public static extern nint BIO_ctrl(IntPtr bp, int cmd, nint larg, IntPtr parg);
 
         // size_t BIO_ctrl_pending(BIO *b);
         [DllImport(DLLNAME, CallingConvention = CallingConvention.Cdecl)]
@@ -331,10 +374,12 @@ namespace OpenSsl
         public static extern int BIO_write(IntPtr b, byte[] data, int dlen);
 
         // BIO_set_mem_eof_return -> define in bio.h: BIO_ctrl(b,BIO_C_SET_BUF_MEM_EOF_RETURN,v,NULL)
+        //Changed Long to nint for v and return type
         const int BIO_C_SET_BUF_MEM_EOF_RETURN = 130; // return end of input
-        public static long BIO_set_mem_eof_return(IntPtr b, int v)
+        public static nint BIO_set_mem_eof_return(IntPtr b, int v)
         {
-            return Native.BIO_ctrl(b, BIO_C_SET_BUF_MEM_EOF_RETURN, v, IntPtr.Zero);
+            // Use nint for the third parameter
+            return Native.BIO_ctrl(b, BIO_C_SET_BUF_MEM_EOF_RETURN, (nint)v, IntPtr.Zero);
         }
         #endregion
 

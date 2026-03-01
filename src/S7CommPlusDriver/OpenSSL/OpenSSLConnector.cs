@@ -102,9 +102,13 @@ namespace OpenSsl
 
         private int DataToRead(byte[] pData, int dataLength)
         {
+            //Console.WriteLine($"[DEBUG] Passing {dataLength} bytes to BIO_write.");           
+
             m_readRequired = false;
 
             int bytesUsed = Native.BIO_write(m_pBioIn, pData, dataLength);
+
+            //Console.WriteLine($"[OpenSSL-Net] Written to BIO_In: {bytesUsed} bytes.");
 
             byte[] pBuffer = null;
             int bufferSize = 0;
@@ -134,17 +138,24 @@ namespace OpenSsl
 
         private void SendPendingData()
         {
-            while (Native.BIO_ctrl_pending(m_pBioOut) > 0)
+
+            nint pending = Native.BIO_ctrl_pending(m_pBioOut);
+
+            while (pending > 0)
             {
+                //Console.WriteLine($"[BIO-Debug] BIO_ctrl_pending reported: {pending} bytes available.");
+
                 byte[] pBuffer = null;
                 int bufferSize = 0;
 
                 GetNextWriteDataBuffer(ref pBuffer, ref bufferSize);
 
                 int bytesToSend = Native.BIO_read(m_pBioOut, pBuffer, bufferSize);
+                //Console.WriteLine($"[BIO-Debug] BIO_read attempted. Result: {bytesToSend} bytes.");
 
                 if (bytesToSend > 0)
                 {
+                    //Console.WriteLine($"[OpenSSL-Net] Read {bytesToSend} bytes from BIO_Out to send to PLC.");
                     OnDataToWrite(pBuffer, bytesToSend);
                 }
 
@@ -155,6 +166,8 @@ namespace OpenSsl
                         HandleError(bytesToSend);
                     }
                 }
+                // Refresh pending count
+                pending = Native.BIO_ctrl_pending(m_pBioOut);
             }
         }
 
@@ -167,7 +180,7 @@ namespace OpenSsl
         {
             if (result <= 0)
             {
-                int error = Native.SSL_get_error(m_pSslConnection, result);
+                int error = (int)Native.SSL_get_error(m_pSslConnection, result);
 
                 switch (error)
                 {
@@ -191,6 +204,18 @@ namespace OpenSsl
             bool dataToRead = false;
 
             GetPendingOperations(ref dataToRead, ref dataToWrite);
+
+            // DEBUG: Force a handshake attempt to see if OpenSSL has something to say
+            //int handshakeRet = Native.SSL_do_handshake(m_pSslConnection);
+
+            //if (handshakeRet <= 0)
+            //{
+            //    int err = (int)Native.SSL_get_error(m_pSslConnection, handshakeRet);
+            //    if (err != Native.SSL_ERROR_WANT_READ)
+            //    {
+            //        Console.WriteLine($"[Handshake-Debug] SSL_do_handshake result: {handshakeRet}, Error: {err}");
+            //    }
+            //}
 
             while ((!m_readRequired && dataToWrite) || dataToRead)
             {
@@ -216,6 +241,13 @@ namespace OpenSsl
 
                 GetPendingOperations(ref dataToRead, ref dataToWrite);
             }
+
+            //If BIO_read isn't triggering, see if anything is stuck in BioOut
+            //if (Native.BIO_ctrl_pending(m_pBioOut) > 0)
+            //{
+            //    //Console.WriteLine($"[BIO-Debug] Handshake loop finished but {Native.BIO_ctrl_pending(m_pBioOut)} bytes are still stuck in BioOut.");
+            //    SendPendingData();
+            //}
         }
 
         public void Write(byte[] pData,int dataLen)
@@ -346,14 +378,16 @@ namespace OpenSsl
             list.AddFirst(pBuffer);
         }
 
-        /// <summary>
         /// Create OMS exporter secret that is needed for the legitimation with the PLC
         /// </summary>
         /// <returns>Secret</returns>
         public byte[] getOMSExporterSecret()
         {
             byte[] secretOut = new byte[32];
-            int ret = (int)Native.SSL_export_keying_material(m_pSslConnection, secretOut, (nint)secretOut.Length, "EXPERIMENTAL_OMS".ToCharArray(), 16, IntPtr.Zero, 0, 0);
+            // Convert to UTF8 bytes to avoid the 2-byte char issue in linux
+            byte[] labelBytes = System.Text.Encoding.UTF8.GetBytes("EXPERIMENTAL_OMS");
+            int ret = Native.SSL_export_keying_material(m_pSslConnection,secretOut,(nint)secretOut.Length,labelBytes,(nint)labelBytes.Length,IntPtr.Zero,0,0);
+
             return secretOut;
         }
     }

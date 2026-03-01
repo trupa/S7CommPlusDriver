@@ -85,14 +85,24 @@ namespace S7CommPlusDriver
 		// OpenSSL möchte Daten auf den Socket aussenden.
 		public void WriteData(byte[] pData, int dataLength)
 		{
-			// SSL fordert Daten zum Absenden an
-			// TODO: Was ist, wenn SSL Daten verschicken möchte, die größer als eine TPDU sind?
-			// Bei großen Zertifikaten oder ähnlichem? Fragmentierung hier?
-			// Console.WriteLine("S7Client - OpenSSL WriteData: dataLength=" + dataLength);
-			byte[] sendData = new byte[dataLength];
-			Array.Copy(pData, sendData, dataLength);
-			SendIsoPacket(sendData);
-		}
+            // SSL requests data for sending. 
+            // We must fragment data that is larger than one TPDU (usually 1024 bytes).
+            const int maxTpduPayload = 900; // Safe value below 1024 to account for headers
+            int offset = 0;
+
+            while (offset < dataLength)
+            {
+                int chunkLength = Math.Min(maxTpduPayload, dataLength - offset);
+                byte[] chunk = new byte[chunkLength];
+                Array.Copy(pData, offset, chunk, 0, chunkLength);
+
+                // If this is the last piece of the original data, set the 'isLast' flag
+                bool isLast = (offset + chunkLength) == dataLength;
+                SendIsoFragment(chunk, isLast);
+
+                offset += chunkLength;
+            }
+        }
 
 		// OpenSSL meldet fertige Daten (decrypted) zum einlesen
 		public void OnDataAvailable()
@@ -267,7 +277,33 @@ namespace S7CommPlusDriver
 				_LastError = S7Consts.errTCPNotConnected;
 		}
 
-		private void SendPacket(byte[] Buffer, int Len)
+        // Sends a fragment of data with a TPKT+COTP header. If isLast=true, the End of Transmission flag is set in the COTP header.
+        private void SendIsoFragment(byte[] buffer, bool isLast)
+        {
+            int size = buffer.Length;
+            // TPKT (4 bytes) + COTP (3 bytes) = 7 bytes header
+            byte[] frame = new byte[size + 7];
+
+            // --- TPKT Header ---
+            frame[0] = 0x03; // Version
+            frame[1] = 0x00; // Reserved
+            ushort totalLen = (ushort)(size + 7);
+            frame[2] = (byte)(totalLen >> 8);
+            frame[3] = (byte)(totalLen & 0xFF);
+
+            // --- COTP Header (DT Data) ---
+            frame[4] = 0x02; // Length
+            frame[5] = 0xf0; // PDU Type (Data)
+                             // 0x80 = End of transmission (Last Unit), 0x00 = More fragments coming
+            frame[6] = (byte)(isLast ? 0x80 : 0x00);
+
+            Array.Copy(buffer, 0, frame, 7, size);
+
+            // Use your existing SendPacket method to push to the MsgSocket
+            SendPacket(frame, frame.Length);
+        }
+
+        private void SendPacket(byte[] Buffer, int Len)
 		{
 			_LastError = Socket.Send(Buffer, Len);
 		}
