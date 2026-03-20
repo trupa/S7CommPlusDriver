@@ -29,7 +29,7 @@ namespace S7CommPlusDriver {
             Match m = reVersions.Match(sessionVersionPAOMString);
             if (!m.Success)
             {
-                Console.WriteLine("S7CommPlusConnection - Legitimate: Could not extract firmware version!");
+                Console.WriteLine($"S7CommPlusConnection - Legitimate: Could not extract firmware version! : PAOM {sessionVersionPAOMString}");
                 return S7Consts.errCliFirmwareNotSupported;
             }
             string deviceVersion = m.Groups[1].Value;
@@ -43,7 +43,7 @@ namespace S7CommPlusDriver {
             {
                 if (fwVerNo < 209)
                 {
-                    Console.WriteLine("S7CommPlusConnection - Legitimate: Firmware version is not supported!");
+                    Console.WriteLine($"S7CommPlusConnection - Legitimate: Firmware version is not supported! Dev: {deviceVersion} FW: {fwVerNo}");
                     return S7Consts.errCliFirmwareNotSupported;
                 }
                 if (fwVerNo < 301)
@@ -51,11 +51,16 @@ namespace S7CommPlusDriver {
                     legacyLegitimation = true;
                 }
             }
+            //Legitimate: Firmware version is not supported! Dev: 212 FW: 401 PAOM :1;6ES7 212-1AG50-0XB0;V4.1
+            else if (sessionVersionPAOMString.Contains("50-0XB0") && deviceVersion.StartsWith("2"))   //New S7-1200 G2 (example: "1;6ES7 212-1HG50-0XB0;V1.0")
+            {
+                legacyLegitimation = false;
+            }
             else if (deviceVersion.StartsWith("2"))
             {
                 if (fwVerNo < 403)
                 {
-                    Console.WriteLine("S7CommPlusConnection - Legitimate: Firmware version is not supported!");
+                    Console.WriteLine($"S7CommPlusConnection - Legitimate: Firmware version is not supported! Dev: {deviceVersion} FW: {fwVerNo} PAOM :{sessionVersionPAOMString}");
                     return S7Consts.errCliFirmwareNotSupported;
                 }
                 if (fwVerNo < 407)
@@ -63,9 +68,10 @@ namespace S7CommPlusDriver {
                     legacyLegitimation = true;
                 }
             }
+
             else
             {
-                Console.WriteLine("S7CommPlusConnection - Legitimate: Device version is not supported!");
+                Console.WriteLine($"S7CommPlusConnection - Legitimate: Device version is not supported! Dev: {deviceVersion} FW: {fwVerNo}");
                 return S7Consts.errCliDeviceNotSupported;
             }
 
