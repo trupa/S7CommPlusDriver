@@ -4,3 +4,4 @@
 
 /src/S7CommPlusDriver/Properties/PublishProfiles/Publish-To-C-Folder.pubxml
 /src/S7CommPlusDriver/Properties/PublishProfiles/Publish-To-Collector.pubxml
+*.pubxml
