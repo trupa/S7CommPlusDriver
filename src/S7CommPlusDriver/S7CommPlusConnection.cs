@@ -115,7 +115,6 @@ namespace S7CommPlusDriver
 
         private void WaitForNewS7plusReceived(int Timeout)
         {
-            //TODO: Tickcount overflows!!!!
             bool Expired = false;
             int Elapsed = Environment.TickCount;
             bool done = false;
@@ -1080,9 +1079,17 @@ namespace S7CommPlusDriver
             if (idx < 0) return null;
             PVartypeListElement varType = pObj.VartypeList.Elements[idx];
             varInfo.AccessSequence += "." + String.Format("{0:X}", varType.LID);
+            bool is1Dim = false;
             if (varType.OffsetInfoType.Is1Dim())
             {
-                calcAccessSeqFor1DimArray(ref symbol, varType, varInfo);
+                if (symbol == "")
+                {
+                    is1Dim = true;
+                }
+                else
+                {
+                    calcAccessSeqFor1DimArray(ref symbol, varType, varInfo);
+                }
             }
             if (varType.OffsetInfoType.IsMDim())
             {
@@ -1090,6 +1097,10 @@ namespace S7CommPlusDriver
             }
             if (varType.OffsetInfoType.HasRelation())
             {
+                if (symbol.Length <= 0 && varType.Softdatatype == Softdatatype.S7COMMP_SOFTDATATYPE_DTL)
+                {
+                    return PlcTags.TagFactory(varInfo.Name, new ItemAddress(varInfo.AccessSequence), varType.Softdatatype, is1Dim);
+                }
                 if (symbol.Length <= 0)
                 {
                     return null;
@@ -1102,7 +1113,7 @@ namespace S7CommPlusDriver
             }
             else
             {
-                return PlcTags.TagFactory(varInfo.Name, new ItemAddress(varInfo.AccessSequence), varType.Softdatatype);
+                return PlcTags.TagFactory(varInfo.Name, new ItemAddress(varInfo.AccessSequence), varType.Softdatatype, is1Dim);
             }
         }
 
